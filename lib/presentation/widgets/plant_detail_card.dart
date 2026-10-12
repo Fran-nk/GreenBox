@@ -9,6 +9,7 @@ import '../../domain/models/plant.dart';
 /// growth stages, and sensor metric tiles.
 class PlantDetailCard extends StatelessWidget {
   final Plant plant;
+  final String? deviceName;
   final Map<String, double> sensorValues; // {'ph': 6.5, 'ce': 1500, ...}
   final bool hasHumidityAlert;
   final VoidCallback onEdit;
@@ -17,6 +18,7 @@ class PlantDetailCard extends StatelessWidget {
   const PlantDetailCard({
     super.key,
     required this.plant,
+    this.deviceName,
     required this.sensorValues,
     this.hasHumidityAlert = false,
     required this.onEdit,
@@ -104,10 +106,14 @@ class PlantDetailCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Expanded(
-                      child: Text(
-                        plant.scientificName,
-                        style: AppTextStyles.plantScientific,
-                        overflow: TextOverflow.ellipsis,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          deviceName ?? plant.scientificName,
+                          style: AppTextStyles.plantScientific,
+                          maxLines: 1,
+                        ),
                       ),
                     ),
                     PopupMenuButton<String>(
@@ -154,9 +160,14 @@ class PlantDetailCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  plant.commonName.toUpperCase(),
-                  style: AppTextStyles.plantCommon,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    plant.commonName.toUpperCase(),
+                    style: AppTextStyles.plantCommon,
+                    maxLines: 1,
+                  ),
                 ),
               ],
             ),
@@ -288,39 +299,55 @@ class PlantDetailCard extends StatelessWidget {
   }
 
   Widget _buildSensorTiles() {
-    final sensors = [
-      _SensorTileData('PH', sensorValues['ph'] ?? 0, '', AppColors.phBlue),
-      _SensorTileData('CE', sensorValues['ce'] ?? 0, 'µS/CM', AppColors.ceYellow),
-      _SensorTileData('Luz', sensorValues['luz'] ?? 0, 'DLI', AppColors.luzGreen),
-      _SensorTileData(
+    final allSensors = {
+      'ph': _SensorTileData('PH', sensorValues['ph'], '', AppColors.phBlue),
+      'ce': _SensorTileData('CE', sensorValues['ce'], 'µS/CM', AppColors.ceYellow),
+      'luz': _SensorTileData('Luz', sensorValues['luz'], 'DLI', AppColors.luzGreen),
+      'humedad': _SensorTileData(
         'Hº', 
-        sensorValues['humedad'] ?? 0, 
+        sensorValues['humedad'], 
         '%', 
         AppColors.humedadTeal,
         textColor: hasHumidityAlert ? AppColors.alertRed : null,
       ),
-    ];
+      'temperatura': _SensorTileData('Temp', sensorValues['temperatura'], '°C', const Color(0xFFE58043)),
+      'presion': _SensorTileData('Pres', sensorValues['presion'], 'kPa', const Color(0xFF3B6FD8)),
+    };
 
-    return SizedBox(
-      height: 135,
-      child: Row(
-        children: sensors.map((s) {
-          return Expanded(
-            child: _buildSensorTile(s),
-          );
-        }).toList(),
-      ),
+    final activeTiles = plant.activeSensors
+        .where((key) => allSensors.containsKey(key))
+        .map((key) => allSensors[key]!)
+        .toList();
+
+    if (activeTiles.isEmpty) return const SizedBox();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double spacing = 8.0;
+        final int columns = 3;
+        final double itemWidth = (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+
+        return SizedBox(
+          width: double.infinity,
+          child: Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            alignment: WrapAlignment.start,
+            children: activeTiles.map((s) {
+              return SizedBox(
+                width: itemWidth,
+                height: 120, // slightly shorter for grid
+                child: _buildSensorTile(s),
+              );
+            }).toList(),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildSensorTile(_SensorTileData data) {
-    // Format the value: show integer if whole number
-    final valueStr = data.value == data.value.roundToDouble()
-        ? data.value.toInt().toString()
-        : data.value.toStringAsFixed(1);
-
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
         color: data.color,
         borderRadius: BorderRadius.circular(20),
@@ -333,17 +360,26 @@ class PlantDetailCard extends StatelessWidget {
             style: AppTextStyles.sensorLabel.copyWith(color: data.textColor),
           ),
           const SizedBox(height: 6),
-          Text(
-            valueStr,
-            style: AppTextStyles.sensorValue.copyWith(color: data.textColor),
-          ),
-          if (data.unit.isNotEmpty) ...[
-            const SizedBox(height: 2),
+          if (data.value == null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4.0),
+              child: Icon(Icons.hourglass_empty, color: data.textColor ?? AppColors.textOnDark, size: 24),
+            )
+          else ...[
             Text(
-              data.unit,
-              style: AppTextStyles.sensorUnit.copyWith(color: data.textColor),
+              data.value! == data.value!.roundToDouble()
+                  ? data.value!.toInt().toString()
+                  : data.value!.toStringAsFixed(1),
+              style: AppTextStyles.sensorValue.copyWith(color: data.textColor),
             ),
-          ],
+            if (data.unit.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                data.unit,
+                style: AppTextStyles.sensorUnit.copyWith(color: data.textColor),
+              ),
+            ],
+          ]
         ],
       ),
     );
@@ -352,7 +388,7 @@ class PlantDetailCard extends StatelessWidget {
 
 class _SensorTileData {
   final String label;
-  final double value;
+  final double? value;
   final String unit;
   final Color color;
   final Color? textColor;

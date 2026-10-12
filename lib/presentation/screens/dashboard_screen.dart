@@ -1,6 +1,6 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/models/chart_data_point.dart';
 import '../../domain/models/crop_card.dart';
@@ -15,6 +15,7 @@ import '../widgets/sensor_chart.dart';
 import '../widgets/app_bottom_nav.dart';
 import 'add_plant_screen.dart';
 import 'profile_screen.dart';
+import 'water_footprint_screen.dart';
 import '../../core/services/notification_service.dart';
 
 /// Main Dashboard screen — assembles all widgets from the Figma design.
@@ -30,7 +31,7 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
+class _DashboardScreenState extends State<DashboardScreen> {
   // ── State ──
   List<CropCard> _crops = [];
   Plant? _activePlant;
@@ -45,12 +46,19 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   StreamSubscription<List<SensorReading>>? _sensorSubscription;
 
+  /// Live hydrostatic pressure (kPa), listened to only by the water footprint tab.
+  final ValueNotifier<double?> _pressure = ValueNotifier(null);
+
+  String get _selectedCropName {
+    for (final c in _crops) {
+      if (c.id == _selectedCropId) return c.name;
+    }
+    return _activePlant?.commonName ?? '';
+  }
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    // Enforce hiding bottom system navigation bar
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.top]);
     _loadData();
   }
 
@@ -71,7 +79,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         return;
       }
 
-      final initialId = crops.first.id;
+      String initialId = crops.first.id;
+      if (_selectedCropId != null && crops.any((c) => c.id == _selectedCropId)) {
+        initialId = _selectedCropId!;
+      }
       await _selectPlant(initialId);
 
       setState(() {
@@ -88,18 +99,22 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     // Cancel previous subscription
     await _sensorSubscription?.cancel();
 
-    final plant = await widget.repository.getActivePlant(plantId);
-    final readings = await widget.repository.getSensorReadings(plantId);
-    final chartData = await widget.repository.getChartData(
-      plantId: plantId,
-      sensorType: _selectedSensorTab.toLowerCase(),
-      timeRange: _chartRange,
-    );
+    // Independent requests run in parallel.
+    final results = await Future.wait([
+      widget.repository.getActivePlant(plantId),
+      widget.repository.getSensorReadings(plantId),
+      widget.repository.getChartData(
+        plantId: plantId,
+        sensorType: _selectedSensorTab.toLowerCase(),
+        timeRange: _chartRange,
+      ),
+    ]);
+    final plant = results[0] as Plant;
+    final readings = results[1] as List<SensorReading>;
+    final chartData = results[2] as List<ChartDataPoint>;
 
-    final sensorMap = <String, double>{};
-    for (final r in readings) {
-      sensorMap[r.sensorType] = r.value;
-    }
+    _pressure.value = null;
+    final sensorMap = _mergeReadings(const {}, readings, plant);
 
     setState(() {
       _activePlant = plant;
@@ -112,17 +127,28 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
     // Start real-time subscription
     _sensorSubscription = widget.repository.watchSensorReadings(plantId).listen((readings) {
-      if (readings.isNotEmpty) {
-        final newSensorMap = Map<String, double>.from(_sensorValues);
-        for (final r in readings) {
-          newSensorMap[r.sensorType] = r.value;
-        }
-        setState(() {
-          _sensorValues = newSensorMap;
-        });
-        _checkAlerts();
-      }
+      if (readings.isEmpty || _activePlant == null) return;
+      final newSensorMap = _mergeReadings(_sensorValues, readings, _activePlant!);
+      // Rebuild the dashboard only when a displayed value actually changed.
+      if (mapEquals(newSensorMap, _sensorValues)) return;
+      setState(() => _sensorValues = newSensorMap);
+      _checkAlerts();
     });
+  }
+
+  /// Merges new readings into the displayed sensor values. The hydrostatic
+  /// pressure goes to [_pressure] (only the water footprint tab listens to it)
+  /// and is kept in the map only when its tile is active on the plant card.
+  Map<String, double> _mergeReadings(Map<String, double> current, List<SensorReading> readings, Plant plant) {
+    final map = Map<String, double>.from(current);
+    for (final r in readings) {
+      if (r.sensorType == 'presion') {
+        _pressure.value = r.value;
+        if (!plant.activeSensors.contains('presion')) continue;
+      }
+      map[r.sensorType] = r.value;
+    }
+    return map;
   }
 
   void _checkAlerts() {
@@ -156,7 +182,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (_activePlant == null) return;
     final chartData = await widget.repository.getChartData(
       plantId: _activePlant!.id,
-      sensorType: type == 'CE' ? 'ce' : type == 'Hº' ? 'humedad' : type.toLowerCase(),
+      sensorType: type == 'CE' ? 'ce' : type == 'Hº' ? 'humedad' : type == 'Temp' ? 'temperatura' : type.toLowerCase(),
       timeRange: _chartRange,
     );
     setState(() => _chartData = chartData);
@@ -167,7 +193,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (_activePlant == null) return;
     final chartData = await widget.repository.getChartData(
       plantId: _activePlant!.id,
-      sensorType: _selectedSensorTab == 'CE' ? 'ce' : _selectedSensorTab == 'Hº' ? 'humedad' : _selectedSensorTab.toLowerCase(),
+      sensorType: _selectedSensorTab == 'CE' ? 'ce' : _selectedSensorTab == 'Hº' ? 'humedad' : _selectedSensorTab == 'Temp' ? 'temperatura' : _selectedSensorTab.toLowerCase(),
       timeRange: range,
     );
     setState(() => _chartData = chartData);
@@ -204,6 +230,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           editMinHumidity: plant.recommendedMinHumidity,
           editMaxHumidity: plant.recommendedMaxHumidity,
           editPlantTemplateId: plant.id,
+          editActiveSensors: plant.activeSensors,
         ),
       ),
     );
@@ -275,7 +302,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 index: _bottomNavIndex,
                 children: [
                   _buildDashboardBody(),
-                  const Center(child: Text('Sección de Dispositivos (Próximamente)')),
+                  _buildWaterFootprintTab(),
                   const ProfileScreen(),
                 ],
               ),
@@ -287,37 +314,58 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _buildDashboardBody() {
-    final bool hasNoData = _crops.isEmpty || _activePlant == null || _sensorValues.isEmpty;
-    
-    String? statusMessage;
-    String? statusContext;
-    Color? statusColor;
-    
-    if (hasNoData) {
-      statusMessage = 'hay un problema con la obtencion de datos';
-      statusColor = AppColors.alertRed;
-    } else if (_hasHumidityAlert) {
-      statusMessage = 'Cuidado';
-      statusContext = 'con tu cultivo de ${_activePlant!.commonName} | ${_crops.firstWhere((c) => c.id == _selectedCropId, orElse: () => CropCard(id: '', name: '', imageUrl: '', progress: 0)).name}';
-      statusColor = AppColors.alertRed;
-    } else {
-      statusMessage = 'Tus plantas estás sanas y salvas💪';
-      statusColor = AppColors.statusGood;
-    }
+  bool get _hasNoData => _crops.isEmpty || _activePlant == null || _sensorValues.isEmpty;
 
+  /// Health status line shown under the greeting: (message, context, color).
+  (String, String?, Color) get _status {
+    if (_hasNoData) {
+      return ('hay un problema con la obtencion de datos', null, AppColors.alertRed);
+    }
+    if (_hasHumidityAlert) {
+      return ('Cuidado', 'con tu cultivo de ${_activePlant!.commonName} | $_selectedCropName', AppColors.alertRed);
+    }
+    return ('Tus plantas estás sanas y salvas💪', null, AppColors.statusGood);
+  }
+
+  GreetingHeader _buildHeader({bool showGreeting = true}) {
+    final (message, contextText, color) = _status;
+    return GreetingHeader(
+      userName: 'Frank',
+      alertMessage: message,
+      alertContext: contextText,
+      alertColor: color,
+      notificationCount: _hasHumidityAlert ? 1 : 0,
+      showGreeting: showGreeting,
+    );
+  }
+
+  Widget _buildWaterFootprintTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildHeader(showGreeting: false),
+        Expanded(
+          child: WaterFootprintScreen(
+            repository: widget.repository,
+            deviceId: _selectedCropId,
+            deviceName: _selectedCropName,
+            plant: _activePlant,
+            pressure: _pressure,
+            hasSensorData: !_hasNoData,
+            hasHumidityAlert: _hasHumidityAlert,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDashboardBody() {
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 1. Greeting + alert
-          GreetingHeader(
-            userName: 'Frank',
-            alertMessage: statusMessage,
-            alertContext: statusContext,
-            alertColor: statusColor,
-            notificationCount: _hasHumidityAlert ? 1 : 0,
-          ),
+          _buildHeader(),
 
           // 2. Crop carousel
           CropCarousel(
@@ -335,6 +383,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           if (_activePlant != null)
             PlantDetailCard(
               plant: _activePlant!,
+              deviceName: _selectedCropName,
               sensorValues: _sensorValues,
               hasHumidityAlert: _hasHumidityAlert,
               onEdit: () => _onEditPlant(_activePlant!),
@@ -345,16 +394,18 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
           // 4. Sensor filter tabs
           SensorFilterTabs(
-            sensorTypes: const ['PH', 'CE', 'Hº', 'Luz'],
+            sensorTypes: const ['PH', 'CE', 'Hº', 'Luz', 'Temp'],
             activeType: _selectedSensorTab,
             onChanged: _onSensorTabChanged,
           ),
 
           // 5. Chart with time-range dropdown
-          SensorChart(
-            dataPoints: _chartData,
-            selectedRange: _chartRange,
-            onRangeChanged: _onChartRangeChanged,
+          RepaintBoundary(
+            child: SensorChart(
+              dataPoints: _chartData,
+              selectedRange: _chartRange,
+              onRangeChanged: _onChartRangeChanged,
+            ),
           ),
 
           const SizedBox(height: 20),
@@ -365,17 +416,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _sensorSubscription?.cancel();
+    _pressure.dispose();
     widget.repository.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeMetrics() {
-    super.didChangeMetrics();
-    // Re-enforce hiding bottom system navigation bar when keyboard/system overlays change
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.top]);
   }
 }
 

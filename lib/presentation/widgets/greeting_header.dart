@@ -11,6 +11,9 @@ class GreetingHeader extends StatelessWidget {
   final int notificationCount;
   final VoidCallback? onNotificationTap;
 
+  /// When false, only the status line and the bell are shown (compact header).
+  final bool showGreeting;
+
   const GreetingHeader({
     super.key,
     required this.userName,
@@ -19,10 +22,23 @@ class GreetingHeader extends StatelessWidget {
     this.alertColor,
     this.notificationCount = 0,
     this.onNotificationTap,
+    this.showGreeting = true,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (!showGreeting) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+        child: Row(
+          children: [
+            Expanded(child: _buildAlert()),
+            _buildNotificationBell(),
+          ],
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
       child: Column(
@@ -43,24 +59,29 @@ class GreetingHeader extends StatelessWidget {
           ),
           if (alertMessage != null) ...[
             const SizedBox(height: 4),
-            RichText(
-              text: TextSpan(
-                children: [
-                  TextSpan(
-                    text: alertMessage!,
-                    style: AppTextStyles.alertBold.copyWith(
-                      color: alertColor ?? AppColors.alertRed,
-                    ),
-                  ),
-                  if (alertContext != null)
-                    TextSpan(
-                      text: ' $alertContext',
-                      style: AppTextStyles.alertSubtitle,
-                    ),
-                ],
-              ),
-            ),
+            _buildAlert(),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAlert() {
+    if (alertMessage == null) return const SizedBox.shrink();
+    return RichText(
+      text: TextSpan(
+        children: [
+          TextSpan(
+            text: alertMessage!,
+            style: AppTextStyles.alertBold.copyWith(
+              color: alertColor ?? AppColors.alertRed,
+            ),
+          ),
+          if (alertContext != null)
+            TextSpan(
+              text: ' $alertContext',
+              style: AppTextStyles.alertSubtitle,
+            ),
         ],
       ),
     );

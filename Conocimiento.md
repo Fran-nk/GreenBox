@@ -116,3 +116,162 @@ Para operar la plataforma de manera fluida manteniéndose dentro de los límites
   1. Configurar las opciones de compilación nativas para asegurar la compatibilidad de origen y destino alineadas estrictamente al estándar de Java 17.
   2. Modificar las directivas lógicas activando explícitamente la bandera de habilitación de desconfiguración de bibliotecas base.
   3. Declarar e inyectar de forma explícita la dependencia externa de herramientas de desconfiguración de Java de Android dentro del bloque de dependencias del script de construcción.
+
+---
+
+## 7. Gestión de Repositorios Independientes Anidados (Git)
+
+En proyectos con estructuras multi-módulo o hardware/software integrados, es común querer aislar un subdirectorio como un repositorio Git independiente del proyecto raíz sin recurrir a submódulos Git complejos.
+
+### Mecanismo de Aislamiento
+* **Ignorado en el Padre**: El repositorio principal (`GreenBox`) contiene la regla `/ESP32GreenBox` en su archivo `.gitignore`. Esto le dice al Git de la raíz que ignore por completo el directorio y todo su contenido, incluyendo su base de datos local de control de versiones `.git`.
+* **Inicialización Autónoma**: Al ejecutar `git init` directamente dentro de la subcarpeta `ESP32GreenBox`, se crea un entorno de Git local completamente aislado. El repositorio padre no rastreará sus cambios ni su historial, permitiendo que esta carpeta sea empujada a un repositorio de GitHub diferente.
+
+### Comandos de Configuración
+1. Inicializar Git dentro de la subcarpeta:
+   ```bash
+   cd ESP32GreenBox
+   git init
+   ```
+2. Agregar archivos, realizar el commit inicial y definir la rama por defecto:
+   ```bash
+   git add .
+   git commit -m "Initial commit: Firmware ESP32"
+   git branch -M main
+   ```
+3. Asociar con el nuevo repositorio de GitHub y subir los cambios:
+   ```bash
+   git remote add origin <URL_DEL_NUEVO_REPOSITORIO_EN_GITHUB>
+   git push -u origin main
+   ```
+
+### Integración en VS Code
+Para gestionar de forma gráfica el repositorio secundario desde la interfaz de VS Code sin que se mezcle visualmente con el repositorio principal:
+* **Método 1: Abrir Carpeta Separada (Recomendado)**: Ir a `Archivo > Abrir carpeta...` y seleccionar únicamente la carpeta `/ESP32GreenBox`. VS Code detectará el repositorio `.git` interno automáticamente y aislará la interfaz de control de versiones.
+* **Método 2: Espacio de Trabajo Multi-Carpeta**: Ir a `Archivo > Agregar carpeta al espacio de trabajo...` y seleccionar `/ESP32GreenBox`. Esto dividirá el panel de control de código fuente de VS Code en dos ramas gestionables de manera independiente.
+
+---
+
+## 8. Arquitectura Modular de Sensores (Bloques Dinámicos)
+
+Para permitir que cada invernadero (módulo) pueda tener diferentes sensores instalados sin afectar la interfaz visual, se diseñó la siguiente estrategia de modularización de la interfaz y los datos:
+
+### Nivel de Configuración
+* **Alcance:** La configuración de qué sensores están activos se gestiona **a nivel de dispositivo (ESP32/Módulo)**. Todos los sensores físicos conectados a un ESP32 aplican a las plantas contenidas en ese módulo en particular.
+* **Configuración Explícita:** La activación de sensores (pH, Humedad Ambiental, CE, Luz, Temperatura) se realiza de manera **manual** por el usuario en la app (ej. mediante checkboxes en la configuración del dispositivo). La base de datos guarda esta lista de `active_sensors` de manera explícita (probablemente como un array de strings en la tabla de dispositivos).
+
+### Experiencia en el Dashboard (Home)
+* **Visualización:** El Home renderiza un **Grid Dinámico de 3 columnas** respetando el diseño base y usando `wrap` para acomodar los bloques de forma flexible de acuerdo a cuántos sensores estén activos.
+* **Falta de Datos (Cold Start):** Si un bloque de sensor es activado en la configuración pero aún no ha llegado ningún dato válido desde el ESP32 por WebSockets o HTTP, el bloque se muestra de todas formas pero exhibe un **estado de "Cargando", "Sin datos" o un ícono de advertencia**, dejando claro que la app está esperando la telemetría correspondiente.
+* **Tipos Soportados MVP:** Por ahora se soporta una lista fija predefinida de parámetros (Humedad suelo, Humedad ambiente, Temperatura, pH, CE, Luz). No se requiere por el momento creación de tipos de sensores personalizados por el usuario.
+
+---
+
+## 9. Integración de Sensor de Temperatura y Humedad (AM2302 / DHT22) y Mapeo en App
+
+### Integración en Firmware ESP32
+* **Hardware y Bus Digital:** Se migró de una lectura analógica simple a la lectura digital del sensor de temperatura y humedad ambiental **AJ-AM2302 (DHT22)** conectado al pin digital `GPIO 4` del ESP32.
+* **Librerías:** Integración de `adafruit/DHT sensor library` y `adafruit/Adafruit Unified Sensor` en `platformio.ini`.
+* **Estructura Broadcast Supabase Realtime:** El payload JSON transmitido mediante WebSockets se expandió para incluir de forma simultánea los campos `"humidity"` y `"temperature"`.
+
+### Parseo y Flujo de Datos en Flutter
+* **Recepción en `watchSensorReadings`:** Se actualizó la clase `SupabaseGreenBoxRepository` para parsear explícitamente los tokens de `temperature` (`temperatura`/`temp`) y `luz` (`light`/`lux`) provenientes de la transmisión Realtime. Anteriormente solo se mapeaban `humedad`, `ph` y `ce`, lo que causaba que la interfaz ignorara las lecturas de temperatura recibidas por WebSockets.
+* **Mapeo de Filtros de Gráficas (`DashboardScreen`):** Se adaptó la lógica de interacción de las pestañas (`SensorFilterTabs`) para que al seleccionar la pestaña `'Temp'` se consulte el nombre de columna de base de datos correcto (`'temperature'`), asegurando la renderización fluida tanto de métricas en vivo como de series temporales.
+* **Selección de Dispositivo/Emulador en Flutter (`flutter run -d`):** Cuando existen múltiples destinos disponibles (Windows, Chrome, Emuladores), `-d android` no es un identificador válido si el emulador tiene un ID específico (por ejemplo `emulator-5554`). Se debe usar `flutter run -d emulator-5554` o el nombre completo del dispositivo listado en `flutter devices`.
+* **Cierre Inesperado por LowMemoryKiller (LMK) en Emuladores:** Al iniciar el flujo de autenticación OAuth (Supabase con Google), la aplicación pasa a segundo plano para abrir Google Chrome o Custom Tabs. Si el emulador tiene poca memoria RAM configurada o está bajo alta presión de recursos, el kernel de Android (`lowmemorykiller`) mata el proceso de la aplicación (`oom_score_adj`) para liberar memoria para el navegador. Esto provoca en Flutter el mensaje `Lost connection to device`. Solución técnica: Aumentar la memoria RAM del AVD en Android Studio (de 1.5GB a 3GB o 4GB en *Show Advanced Settings -> RAM*) o reiniciar el emulador con *Cold Boot*.
+
+---
+
+## 10. Estudio de Huella Hídrica Azul (Sensor de Presión Hidrostática)
+
+### Concepto
+* **Huella hídrica azul:** Volumen de agua dulce consumida por el cultivo dividido por la masa cosechada. Se expresa en L/kg (numéricamente igual a m³/t).
+* **Medición del agua:** El agua de riego se almacena en un recipiente rectangular. Un sensor de presión hidrostática sumergido mide la presión de la columna de agua, y la app la convierte a altura y volumen.
+
+### Fórmulas (`lib/domain/services/water_footprint_calculator.dart`)
+* Altura: `h = P / (ρ·g)`, con ρ = 1000 kg/m³ y g = 9.81 m/s² → 1 kPa ≈ 10.19 cm de agua.
+* Volumen: `V (L) = ancho (cm) · largo (cm) · h (cm) / 1000`.
+* Volumen máximo del recipiente: `ancho · largo · altura / 1000`.
+* Nivel %: el volumen de la **primera lectura** del estudio se toma como el 100 %.
+* Consumo total: suma de los descensos entre recargas: `(V_inicial − V_antes₁) + (V_después₁ − V_antes₂) + … + (V_despuésₙ − V_final)`.
+* Huella hídrica azul: `consumo (L) / peso cosechado (kg)`.
+
+### Payload del ESP32
+El firmware envía la presión en **kPa** con la llave `pressure` dentro del broadcast Realtime existente (eventos `telemetry` o `sensor_reading` en el canal `device:<uuid>`), ej. `{"pressure": 1.47, "humidity": 65}`. La app también acepta `presion` y `water_pressure`, y la expone como el sensor `presion`.
+
+### Rendimiento
+* La presión en vivo llega a la pestaña mediante un `ValueNotifier` del dashboard: solo la parte de la tarjeta que la muestra se reconstruye en cada lectura, no todo el dashboard.
+* El dashboard solo llama a `setState` cuando cambia un valor visible (`mapEquals`), y la presión solo entra al mapa de sensores si su tile está activo.
+* Las consultas independientes a Supabase se lanzan en paralelo (`Future.wait`), y el recipiente 3D y la gráfica van en `RepaintBoundary`.
+
+### Flujo en la App (pestaña de la gota en la barra inferior)
+La pantalla sigue el diseño: estado del cultivo arriba, pestañas de análisis, título "HUELLA HIDRICA (WFN)" y una tarjeta oscura con el recipiente 3D (tocar para editar medidas), el agua consumida, el confort del invernadero, la fiabilidad del cálculo y los botones Emular / Cosechar (Iniciar si no hay estudio).
+
+1. **Recipiente:** se configuran ancho, largo y altura (cm); se muestra el volumen máximo.
+2. **Nivel en vivo:** presión, altura, volumen y porcentaje respecto al nivel inicial.
+3. **Tomar primera lectura (100 %):** pide el nivel de agua inicial en cm. Se rellena con el sensor si hay lectura (botón SENSOR), pero se puede escribir a mano, así el estudio funciona sin sensor.
+4. **Registrar recarga:** diálogo de dos pasos (capturar antes → rellenar → capturar después). Los litros se pueden capturar del sensor o escribir a mano.
+5. **Simulador:** disponible siempre, haya o no estudio en curso o sensor. Todo es editable: nivel inicial y final (cm), agua recargada (L), número de plantas y peso por planta (deslizador o gramos exactos; referencia: lechuga 300 g, espinaca 150 g). Muestra en vivo el volumen, el consumo `V_inicial − V_final + recargado` y la huella. No guarda nada; recuerda los valores para la siguiente apertura y para el cierre.
+6. **Finalizar cosecha:** popup de confirmación con cuenta regresiva de 3 s, donde se ingresan el nivel final de agua (del sensor o a mano), el número de plantas y el peso real. Cierra el estudio y guarda el resultado en el historial.
+
+### Migración SQL
+Ya aplicada en el proyecto `cflrnbpwcznnimiijluk` como migración `water_footprint_study`. La versión aplicada usa columnas `double precision` (igual que el resto del esquema), índices en las claves foráneas y políticas `to authenticated` con `(select auth.uid())`. El SQL de referencia:
+```sql
+alter table devices
+  add column if not exists tank_width_cm numeric,
+  add column if not exists tank_length_cm numeric,
+  add column if not exists tank_height_cm numeric;
+
+-- Opcional: peso de referencia por planta para el simulador
+alter table plants add column if not exists typical_harvest_weight_kg numeric;
+update plants set typical_harvest_weight_kg = 0.15 where id = '11111111-1111-4111-a111-111111111111';
+update plants set typical_harvest_weight_kg = 0.30 where id = '22222222-2222-4222-a222-222222222222';
+
+create table if not exists water_footprint_studies (
+  id uuid primary key default gen_random_uuid(),
+  device_id uuid not null references devices(id) on delete cascade,
+  plant_id uuid references plants(id),
+  status text not null default 'active' check (status in ('active', 'finished')),
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  initial_pressure_kpa numeric not null,
+  initial_volume_l numeric not null,
+  final_pressure_kpa numeric,
+  final_volume_l numeric,
+  total_consumption_l numeric,
+  plant_count int,
+  harvest_weight_kg numeric,
+  water_footprint_l_per_kg numeric
+);
+
+create table if not exists water_refills (
+  id uuid primary key default gen_random_uuid(),
+  study_id uuid not null references water_footprint_studies(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  volume_before_l numeric not null,
+  volume_after_l numeric not null
+);
+
+alter table water_footprint_studies enable row level security;
+alter table water_refills enable row level security;
+
+create policy "Studies of own devices" on water_footprint_studies
+  for all using (
+    exists (select 1 from devices d where d.id = device_id and d.owner_id = auth.uid())
+  ) with check (
+    exists (select 1 from devices d where d.id = device_id and d.owner_id = auth.uid())
+  );
+
+create policy "Refills of own studies" on water_refills
+  for all using (
+    exists (
+      select 1 from water_footprint_studies s join devices d on d.id = s.device_id
+      where s.id = study_id and d.owner_id = auth.uid()
+    )
+  ) with check (
+    exists (
+      select 1 from water_footprint_studies s join devices d on d.id = s.device_id
+      where s.id = study_id and d.owner_id = auth.uid()
+    )
+  );
+```

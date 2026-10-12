@@ -2,6 +2,7 @@ import '../models/sensor_reading.dart';
 import '../models/plant.dart';
 import '../models/crop_card.dart';
 import '../models/chart_data_point.dart';
+import '../models/water_study.dart';
 
 /// Abstract data repository for GreenBox sensor data.
 ///
@@ -44,6 +45,7 @@ abstract class GreenBoxRepository {
     required String name,
     required String plantTemplateId,
     required Map<String, double> thresholds,
+    List<String>? activeSensors,
   });
 
   /// Delete a physical device and all associated data.
@@ -54,7 +56,51 @@ abstract class GreenBoxRepository {
     required String name,
     required String plantTemplateId,
     required Map<String, double> thresholds,
+    List<String>? activeSensors,
   });
+
+  // ── Blue water footprint ──
+
+  /// Get the tank dimensions configured for a device (null if not set).
+  Future<TankDimensions?> getTankDimensions(String deviceId);
+
+  /// Save the tank dimensions for a device.
+  Future<void> saveTankDimensions(String deviceId, TankDimensions dimensions);
+
+  /// Get the active (not finished) water footprint study of a device.
+  Future<WaterStudy?> getActiveStudy(String deviceId);
+
+  /// Start a study; the first reading is the 100 % water level.
+  Future<WaterStudy> startStudy({
+    required String deviceId,
+    String? plantId,
+    required double initialPressureKpa,
+    required double initialVolumeL,
+  });
+
+  /// Register a tank refill (volume right before and right after refilling).
+  Future<WaterRefill> addRefill({
+    required String studyId,
+    required double volumeBeforeL,
+    required double volumeAfterL,
+  });
+
+  /// Get all refills of a study.
+  Future<List<WaterRefill>> getRefills(String studyId);
+
+  /// Finish the harvest and store the blue water footprint result.
+  Future<void> finishStudy({
+    required String studyId,
+    required double finalPressureKpa,
+    required double finalVolumeL,
+    required double totalConsumptionL,
+    required int plantCount,
+    required double harvestWeightKg,
+    required double waterFootprintLPerKg,
+  });
+
+  /// Get the finished studies of a device (most recent first).
+  Future<List<WaterStudy>> getStudyHistory(String deviceId);
 
   /// Clean up resources (close connections, cancel subscriptions).
   void dispose();

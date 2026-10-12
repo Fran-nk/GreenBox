@@ -11,6 +11,8 @@ class Plant {
   final double growthProgress;  // 0.0 to 1.0
   final double recommendedMinHumidity;
   final double recommendedMaxHumidity;
+  final List<String> activeSensors;
+  final double typicalHarvestWeightKg; // reference weight per plant, used by the harvest simulator
 
   const Plant({
     required this.id,
@@ -24,7 +26,17 @@ class Plant {
     this.growthProgress = 0.0,
     this.recommendedMinHumidity = 60.0,
     this.recommendedMaxHumidity = 80.0,
+    this.activeSensors = const ['ph', 'ce', 'humedad', 'luz', 'temperatura'],
+    this.typicalHarvestWeightKg = 0.25,
   });
+
+  /// Reference harvest weight per plant (kg) by common name.
+  static double defaultHarvestWeightFor(String commonName) {
+    final name = commonName.toLowerCase();
+    if (name.contains('lechuga')) return 0.30;
+    if (name.contains('espinaca')) return 0.15;
+    return 0.25;
+  }
 
   /// Recommended default crop templates for spinach and lettuce.
   static List<Plant> getDefaultTemplates() {
@@ -38,6 +50,7 @@ class Plant {
         totalDays: 40,
         recommendedMinHumidity: 60.0,
         recommendedMaxHumidity: 75.0,
+        typicalHarvestWeightKg: 0.15,
         growthStages: [
           GrowthStage(name: 'Germinación', days: 7, isCurrent: true),
           GrowthStage(name: 'Vegetativa', days: 20),
@@ -53,6 +66,7 @@ class Plant {
         totalDays: 30,
         recommendedMinHumidity: 55.0,
         recommendedMaxHumidity: 70.0,
+        typicalHarvestWeightKg: 0.30,
         growthStages: [
           GrowthStage(name: 'Germinación', days: 5, isCurrent: true),
           GrowthStage(name: 'Vegetativa', days: 15),

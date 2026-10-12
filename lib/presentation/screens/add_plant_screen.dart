@@ -11,6 +11,7 @@ class AddPlantScreen extends StatefulWidget {
   final double? editMinHumidity;
   final double? editMaxHumidity;
   final String? editPlantTemplateId;
+  final List<String>? editActiveSensors;
 
   const AddPlantScreen({
     super.key,
@@ -20,6 +21,7 @@ class AddPlantScreen extends StatefulWidget {
     this.editMinHumidity,
     this.editMaxHumidity,
     this.editPlantTemplateId,
+    this.editActiveSensors,
   });
 
   @override
@@ -35,6 +37,16 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
   double _maxHumidity = 80.0;
   bool _isLoading = true;
   bool _isSaving = false;
+  List<String> _activeSensors = ['ph', 'ce', 'humedad', 'luz', 'temperatura'];
+
+  final List<Map<String, String>> _availableSensors = [
+    {'id': 'ph', 'name': 'pH'},
+    {'id': 'ce', 'name': 'Electroconductividad'},
+    {'id': 'humedad', 'name': 'Humedad Ambiental'},
+    {'id': 'luz', 'name': 'Luminosidad'},
+    {'id': 'temperatura', 'name': 'Temperatura'},
+    {'id': 'presion', 'name': 'Presión Hidrostática (nivel de agua)'},
+  ];
 
   bool get _isEditMode => widget.editDeviceId != null;
 
@@ -46,6 +58,9 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
     _selectedTemplateId = widget.editPlantTemplateId;
     _minHumidity = widget.editMinHumidity ?? 60.0;
     _maxHumidity = widget.editMaxHumidity ?? 80.0;
+    if (widget.editActiveSensors != null) {
+      _activeSensors = List.from(widget.editActiveSensors!);
+    }
     _loadTemplates();
   }
 
@@ -91,6 +106,7 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
             'humidity_min': _minHumidity,
             'humidity_max': _maxHumidity,
           },
+          activeSensors: _activeSensors,
         );
       } else {
         await widget.repository.addDevice(
@@ -101,6 +117,7 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
             'humidity_min': _minHumidity,
             'humidity_max': _maxHumidity,
           },
+          activeSensors: _activeSensors,
         );
       }
       if (mounted) Navigator.pop(context, true);
@@ -159,6 +176,10 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
                   Text('4. Configurar Humedad (%)', style: AppTextStyles.alertSubtitle),
                   const SizedBox(height: 10),
                   _buildHumiditySlider(),
+                  const SizedBox(height: 30),
+                  Text('5. Sensores Activos', style: AppTextStyles.alertSubtitle),
+                  const SizedBox(height: 10),
+                  _buildSensorsSelector(),
                   const SizedBox(height: 50),
                   _buildSaveButton(),
                 ],
@@ -169,7 +190,7 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
 
   Widget _buildPlantSelector() {
     return SizedBox(
-      height: 130,
+      height: 150,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         itemCount: _templates.length,
@@ -209,6 +230,15 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
                     style: AppTextStyles.chartLabel.copyWith(
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                       color: AppColors.textPrimary,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  Text(
+                    plant.scientificName,
+                    style: AppTextStyles.chartLabel.copyWith(
+                      fontSize: 10,
+                      fontStyle: FontStyle.italic,
+                      color: AppColors.textPrimary.withOpacity(0.6),
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -287,6 +317,34 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
             },
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSensorsSelector() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: _availableSensors.map((sensor) {
+          final isSelected = _activeSensors.contains(sensor['id']);
+          return CheckboxListTile(
+            title: Text(sensor['name']!, style: AppTextStyles.chartFilter),
+            activeColor: AppColors.primary,
+            value: isSelected,
+            onChanged: (bool? value) {
+              setState(() {
+                if (value == true) {
+                  _activeSensors.add(sensor['id']!);
+                } else {
+                  _activeSensors.remove(sensor['id']!);
+                }
+              });
+            },
+          );
+        }).toList(),
       ),
     );
   }

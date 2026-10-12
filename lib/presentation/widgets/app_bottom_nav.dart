@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 
 /// Bottom navigation bar matching Figma's "Menu" component.
-/// Three items: Dashboard (chart icon), Devices (box icon), Profile (avatar).
+/// Three items: Dashboard (chart icon), Water footprint (drop icon), Profile (avatar).
 class AppBottomNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
@@ -16,7 +16,6 @@ class AppBottomNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 72,
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: const BorderRadius.only(
@@ -31,26 +30,34 @@ class AppBottomNav extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _NavItem(
-            icon: Icons.bar_chart_rounded,
-            isSelected: currentIndex == 0,
-            onTap: () => onTap(0),
+      child: SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        child: SizedBox(
+          height: 60, // Reduced from 72
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _NavItem(
+                icon: Icons.bar_chart_rounded,
+                isSelected: currentIndex == 0,
+                onTap: () => onTap(0),
+              ),
+              _NavItem(
+                icon: Icons.water_drop_rounded,
+                isSelected: currentIndex == 1,
+                onTap: () => onTap(1),
+              ),
+              _NavItem(
+                icon: Icons.account_circle,
+                isSelected: currentIndex == 2,
+                onTap: () => onTap(2),
+                isAvatar: true,
+              ),
+            ],
           ),
-          _NavItem(
-            icon: Icons.view_in_ar_rounded,
-            isSelected: currentIndex == 1,
-            onTap: () => onTap(1),
-          ),
-          _NavItem(
-            icon: Icons.account_circle,
-            isSelected: currentIndex == 2,
-            onTap: () => onTap(2),
-            isAvatar: true,
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -78,8 +85,8 @@ class _NavItem extends StatelessWidget {
         padding: const EdgeInsets.all(8),
         child: isAvatar
             ? Container(
-                width: 35,
-                height: 35,
+                width: 28, // Reduced from 35
+                height: 28, // Reduced from 35
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: AppColors.divider,
@@ -87,11 +94,11 @@ class _NavItem extends StatelessWidget {
                       ? Border.all(color: AppColors.primary, width: 2)
                       : null,
                 ),
-                child: const Icon(Icons.person, size: 22, color: AppColors.textSecondary),
+                child: const Icon(Icons.person, size: 18, color: AppColors.textSecondary), // Reduced from 22
               )
             : Icon(
                 icon,
-                size: 35,
+                size: 26, // Reduced from 35
                 color: isSelected ? AppColors.primary : AppColors.textSecondary,
               ),
       ),

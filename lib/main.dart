@@ -28,13 +28,15 @@ void main() async {
     DeviceOrientation.portraitDown,
   ]);
 
-  // Hide the bottom navigation bar (home, back, recents)
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.top]);
+  // Enable edge-to-edge system UI
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
-  // Set status bar style
+  // Set status bar & system navigation bar style
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.dark,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.dark,
   ));
 
   final GreenBoxRepository repository = SupabaseGreenBoxRepository();
@@ -94,11 +96,20 @@ class _GreenBoxAppState extends State<GreenBoxApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'GreenBox',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      home: _initialScreen ?? const Scaffold(body: Center(child: CircularProgressIndicator())),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarColor: Colors.transparent,
+        systemNavigationBarIconBrightness: Brightness.dark,
+        systemNavigationBarDividerColor: Colors.transparent,
+      ),
+      child: MaterialApp(
+        title: 'GreenBox',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        home: _initialScreen ?? const Scaffold(body: Center(child: CircularProgressIndicator())),
+      ),
     );
   }
 }
