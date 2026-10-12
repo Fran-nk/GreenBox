@@ -44,5 +44,8 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-#ESP32
-/ESP32GreenBox
+
+# Documentación y memoria del asistente AI
+[Cc]onocimiento.md
+[Gg][Ee][Mm][Ii][Nn][Ii].md
+.gemini/
