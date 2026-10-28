@@ -58,6 +58,8 @@ class ProfileScreen extends StatelessWidget {
                         ? Image.network(
                             avatarUrl,
                             fit: BoxFit.cover,
+                            // Decode at display size (120 px @3x) instead of full resolution.
+                            cacheWidth: 360,
                             errorBuilder: (context, error, stackTrace) => const Icon(
                               Icons.person,
                               size: 60,

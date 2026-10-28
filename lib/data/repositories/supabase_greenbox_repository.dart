@@ -27,10 +27,23 @@ class SupabaseGreenBoxRepository implements GreenBoxRepository {
       if (data == null) return [];
 
       final now = DateTime.parse(data['time']);
+      // Columns can be null when the device does not have that sensor.
+      const columns = {
+        'ph': ('ph', ''),
+        'ec': ('ce', 'µS/cm'),
+        'humidity': ('humedad', '%'),
+        'temperature': ('temperatura', '°C'),
+        'light': ('luz', 'lx'),
+      };
       return [
-        SensorReading(sensorType: 'ph', value: (data['ph'] as num).toDouble(), unit: '', timestamp: now),
-        SensorReading(sensorType: 'ce', value: (data['ec'] as num).toDouble(), unit: 'µS/cm', timestamp: now),
-        SensorReading(sensorType: 'humedad', value: (data['humidity'] as num).toDouble(), unit: '%', timestamp: now),
+        for (final entry in columns.entries)
+          if (data[entry.key] != null)
+            SensorReading(
+              sensorType: entry.value.$1,
+              value: (data[entry.key] as num).toDouble(),
+              unit: entry.value.$2,
+              timestamp: now,
+            ),
       ];
     } catch (e) {
       return [];
@@ -128,21 +141,46 @@ class SupabaseGreenBoxRepository implements GreenBoxRepository {
                     ? 'light'
                     : 'ph';
 
-    final response = await _client
+    // Only the selected range is downloaded (uses the (device_id, time desc) index).
+    final (window, bucket) = switch (timeRange) {
+      ChartTimeRange.daily => (const Duration(days: 1), const Duration(hours: 1)),
+      ChartTimeRange.weekly => (const Duration(days: 7), const Duration(hours: 6)),
+      ChartTimeRange.monthly => (const Duration(days: 30), const Duration(days: 1)),
+    };
+    final since = DateTime.now().toUtc().subtract(window);
+
+    final List<dynamic> response = await _client
         .from('sensor_data')
         .select('time, $column')
         .eq('device_id', plantId)
-        .order('time', ascending: true);
+        .not(column, 'is', null)
+        .gte('time', since.toIso8601String())
+        .order('time', ascending: false)
+        .limit(_maxChartRows);
 
-    return response.map<ChartDataPoint>((d) {
-      final value = (d[column] as num).toDouble();
+    // Average readings per time bucket so the chart draws ~24-30 bars
+    // instead of one bar per reading.
+    final sums = <int, double>{};
+    final counts = <int, int>{};
+    for (final d in response) {
+      final t = DateTime.parse(d['time']).millisecondsSinceEpoch;
+      final key = t - t % bucket.inMilliseconds;
+      sums[key] = (sums[key] ?? 0) + (d[column] as num).toDouble();
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    final keys = sums.keys.toList()..sort();
+    return keys.map<ChartDataPoint>((key) {
+      final value = sums[key]! / counts[key]!;
       return ChartDataPoint(
-        timestamp: DateTime.parse(d['time']),
+        timestamp: DateTime.fromMillisecondsSinceEpoch(key),
         value: value,
         isInRange: value >= 5.5 && value <= 7.5, // Simple threshold logic
       );
     }).toList();
   }
+
+  /// Upper bound of rows downloaded per chart request (PostgREST default cap).
+  static const int _maxChartRows = 1000;
 
   @override
   Stream<List<SensorReading>> watchSensorReadings(String plantId) {

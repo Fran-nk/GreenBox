@@ -63,6 +63,8 @@ flutter:
 
   assets:
     - assets/images/
+    # Bundled so google_fonts never downloads them at runtime.
+    - assets/google_fonts/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

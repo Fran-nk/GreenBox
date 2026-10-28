@@ -9,11 +9,12 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  bool _isInitialized = false;
+  Future<void>? _initFuture;
 
-  Future<void> init() async {
-    if (_isInitialized) return;
+  /// Safe to call many times; every caller awaits the same initialization.
+  Future<void> init() => _initFuture ??= _init();
 
+  Future<void> _init() async {
     // Initialization for Android
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -37,14 +38,14 @@ class NotificationService {
         debugPrint('Notification clicked: ${response.payload}');
       },
     );
-
-    _isInitialized = true;
   }
 
   Future<void> showHumidityAlert({
     required String plantName,
     required String deviceName,
   }) async {
+    await init();
+
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
       'greenbox_alerts_channel',

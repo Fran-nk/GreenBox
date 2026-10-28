@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/theme/app_theme.dart';
 import 'core/constants/supabase_constants.dart';
@@ -12,9 +13,13 @@ import 'core/services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Initialize local notifications
-  await NotificationService().init();
+
+  // Fonts are bundled in assets/google_fonts, never downloaded at runtime.
+  GoogleFonts.config.allowRuntimeFetching = false;
+
+  // Local notifications initialize in the background (on iOS this waits for
+  // the permission dialog); alerts await it before showing.
+  unawaited(NotificationService().init());
 
   // Initialize Supabase
   await Supabase.initialize(

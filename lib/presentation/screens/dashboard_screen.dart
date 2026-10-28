@@ -44,6 +44,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isLoading = true;
   bool _hasHumidityAlert = false;
 
+  /// Tabs are built the first time they are opened, then kept alive.
+  final Set<int> _visitedTabs = {0};
+
+  /// Chart data already fetched, keyed by plant/sensor/range, so switching
+  /// tabs or ranges back and forth is instant.
+  final Map<String, List<ChartDataPoint>> _chartCache = {};
+
+  /// Identifies the latest chart request; older responses are discarded.
+  String? _chartRequestKey;
+
   StreamSubscription<List<SensorReading>>? _sensorSubscription;
 
   /// Live hydrostatic pressure (kPa), listened to only by the water footprint tab.
@@ -99,15 +109,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // Cancel previous subscription
     await _sensorSubscription?.cancel();
 
+    // Selecting a plant always shows fresh history; the cache only speeds up
+    // tab/range switches within the selected plant.
+    _chartCache.clear();
+    _chartRequestKey = '$plantId|$_selectedSensorTab|${_chartRange.name}';
+
     // Independent requests run in parallel.
     final results = await Future.wait([
       widget.repository.getActivePlant(plantId),
       widget.repository.getSensorReadings(plantId),
-      widget.repository.getChartData(
-        plantId: plantId,
-        sensorType: _selectedSensorTab.toLowerCase(),
-        timeRange: _chartRange,
-      ),
+      _fetchChart(plantId, _selectedSensorTab, _chartRange),
     ]);
     final plant = results[0] as Plant;
     final readings = results[1] as List<SensorReading>;
@@ -177,26 +188,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<void> _onSensorTabChanged(String type) async {
-    setState(() => _selectedSensorTab = type);
-    if (_activePlant == null) return;
-    final chartData = await widget.repository.getChartData(
-      plantId: _activePlant!.id,
-      sensorType: type == 'CE' ? 'ce' : type == 'Hº' ? 'humedad' : type == 'Temp' ? 'temperatura' : type.toLowerCase(),
-      timeRange: _chartRange,
-    );
-    setState(() => _chartData = chartData);
-  }
+  /// Maps a sensor tab label to the repository sensor type.
+  static String _sensorTypeFor(String tab) => switch (tab) {
+        'CE' => 'ce',
+        'Hº' => 'humedad',
+        'Temp' => 'temperatura',
+        _ => tab.toLowerCase(),
+      };
 
-  Future<void> _onChartRangeChanged(ChartTimeRange range) async {
-    setState(() => _chartRange = range);
-    if (_activePlant == null) return;
-    final chartData = await widget.repository.getChartData(
-      plantId: _activePlant!.id,
-      sensorType: _selectedSensorTab == 'CE' ? 'ce' : _selectedSensorTab == 'Hº' ? 'humedad' : _selectedSensorTab == 'Temp' ? 'temperatura' : _selectedSensorTab.toLowerCase(),
+  /// Returns cached chart data when available, otherwise fetches and caches it.
+  Future<List<ChartDataPoint>> _fetchChart(String plantId, String tab, ChartTimeRange range) async {
+    final key = '$plantId|$tab|${range.name}';
+    final cached = _chartCache[key];
+    if (cached != null) return cached;
+    final data = await widget.repository.getChartData(
+      plantId: plantId,
+      sensorType: _sensorTypeFor(tab),
       timeRange: range,
     );
-    setState(() => _chartData = chartData);
+    return _chartCache[key] = data;
+  }
+
+  Future<void> _refreshChart() async {
+    if (_activePlant == null) return;
+    final plantId = _activePlant!.id;
+    final key = '$plantId|$_selectedSensorTab|${_chartRange.name}';
+    _chartRequestKey = key;
+    try {
+      final chartData = await _fetchChart(plantId, _selectedSensorTab, _chartRange);
+      // Ignore responses that arrive after the user picked something else.
+      if (!mounted || _chartRequestKey != key) return;
+      setState(() => _chartData = chartData);
+    } catch (e) {
+      debugPrint('Error loading chart: $e');
+    }
+  }
+
+  void _onSensorTabChanged(String type) {
+    setState(() => _selectedSensorTab = type);
+    _refreshChart();
+  }
+
+  void _onChartRangeChanged(ChartTimeRange range) {
+    setState(() => _chartRange = range);
+    _refreshChart();
   }
 
   Future<void> _onAddPlant() async {
@@ -302,14 +337,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 index: _bottomNavIndex,
                 children: [
                   _buildDashboardBody(),
-                  _buildWaterFootprintTab(),
-                  const ProfileScreen(),
+                  _visitedTabs.contains(1) ? _buildWaterFootprintTab() : const SizedBox.shrink(),
+                  _visitedTabs.contains(2) ? const ProfileScreen() : const SizedBox.shrink(),
                 ],
               ),
       ),
       bottomNavigationBar: AppBottomNav(
         currentIndex: _bottomNavIndex,
-        onTap: (i) => setState(() => _bottomNavIndex = i),
+        onTap: (i) => setState(() {
+          _bottomNavIndex = i;
+          _visitedTabs.add(i);
+        }),
       ),
     );
   }
