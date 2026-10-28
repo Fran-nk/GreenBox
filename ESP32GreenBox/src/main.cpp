@@ -3,14 +3,18 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h> // <-- Añadido para conexión HTTPS segura
 #include <DHT.h>              // <-- Añadido para el sensor AM2302 (DHT22)
+#include <time.h>
+
+#include "root_ca.h" // Certificados raíz para validar el HTTPS de Supabase
+#include "secrets.h" // Credenciales (no se sube a git; ver secrets.example.h)
 
 // --- 1. CONFIGURACIÓN WIFI ---
-const char *ssid = "Casa_2.4G";      // Escribe el nombre de tu WiFi
-const char *password = "29499304.J"; // Escribe la contraseña
+const char *ssid = WIFI_SSID;
+const char *password = WIFI_PASSWORD;
 
 // --- 2. CONFIGURACIÓN SUPABASE ---
-const char *supabase_url = "https://cflrnbpwcznnimiijluk.supabase.co";
-const char *supabase_key = "sb_publishable_Z_mqEIUofpbzeMu5rNnKIQ_UQ8X_Urd";
+const char *supabase_url = SUPABASE_URL;
+const char *supabase_key = SUPABASE_KEY;
 
 // El UUID único del dispositivo generado dinámicamente a partir de su dirección
 // MAC
@@ -38,6 +42,9 @@ DHT dht(DHTPIN, DHTTYPE);
 
 // Cliente seguro global
 WiFiClientSecure client;
+// HTTPClient global para reutilizar la conexión TLS entre envíos (evita un
+// handshake HTTPS completo en cada POST)
+HTTPClient http;
 
 void setup() {
   Serial.begin(115200);
@@ -61,9 +68,21 @@ void setup() {
   Serial.println(device_uuid);
   Serial.println("=============================================\n");
 
-  // Configurar el cliente para omitir la validación del certificado (Ideal para
-  // MVP)
-  client.setInsecure();
+  // Sincronizar la hora por NTP: necesaria para comprobar la vigencia del
+  // certificado TLS
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  Serial.print("Sincronizando hora");
+  time_t now = time(nullptr);
+  for (int i = 0; i < 20 && now < 1700000000; i++) {
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+  }
+  Serial.println(now >= 1700000000 ? " OK" : " (sin NTP, se continúa)");
+
+  // Validar el certificado del servidor contra las CA raíz de Supabase
+  client.setCACert(SUPABASE_ROOT_CA);
+  http.setReuse(true); // Keep-alive: mantener abierta la conexión con Supabase
 
   // Iniciar sensor AM2302
   dht.begin();
@@ -71,7 +90,6 @@ void setup() {
 
 void sendToSupabase(float humidity, float temperature) {
   if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
     // Utilizamos el endpoint de Broadcast HTTP de Supabase Realtime (No guarda
     // en Base de Datos)
     String endpoint = String(supabase_url) + "/realtime/v1/api/broadcast";
@@ -114,7 +132,7 @@ void sendToSupabase(float humidity, float temperature) {
       Serial.println(http.errorToString(httpResponseCode).c_str());
     }
 
-    http.end(); // Cerrar conexión
+    http.end(); // Con setReuse(true) la conexión TLS queda abierta para el próximo envío
   } else {
     Serial.println("Error: WiFi desconectado.");
   }
@@ -143,5 +161,5 @@ void loop() {
   sendToSupabase(humidity, temperature);
 
   // 5. Esperar antes de la siguiente lectura (el AM2302 requiere ~2 segundos entre lecturas)
-  delay(5000);
+  delay(2000);
 }
