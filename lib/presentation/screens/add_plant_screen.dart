@@ -3,6 +3,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../domain/models/plant.dart';
 import '../../domain/repositories/greenbox_repository.dart';
+import 'wifi_setup_screen.dart';
 
 class AddPlantScreen extends StatefulWidget {
   final GreenBoxRepository repository;
@@ -165,6 +166,8 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
                     hintText: 'Ingresa el UUID del ESP32',
                     enabled: !_isEditMode,
                   ),
+                  const SizedBox(height: 10),
+                  _buildWifiSetupButton(),
                   const SizedBox(height: 30),
                   Text('3. Nombre del Dispositivo', style: AppTextStyles.alertSubtitle),
                   const SizedBox(height: 10),
@@ -280,6 +283,43 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
         ),
         style: AppTextStyles.chartFilter.copyWith(
           color: enabled ? AppColors.textPrimary : Colors.grey[600],
+        ),
+      ),
+    );
+  }
+
+  /// Sends WiFi credentials to the ESP32 over Bluetooth; on success the
+  /// device UUID it reports fills the identifier field.
+  Future<void> _openWifiSetup() async {
+    final uuid = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (context) => const WifiSetupScreen()),
+    );
+    if (uuid == null || !mounted) return;
+    if (!_isEditMode) {
+      setState(() => _deviceIdController.text = uuid);
+    } else if (uuid != widget.editDeviceId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ese GreenBox no es el de esta planta, pero quedó conectado al WiFi.')),
+      );
+    }
+  }
+
+  Widget _buildWifiSetupButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: _openWifiSetup,
+        icon: const Icon(Icons.bluetooth, color: AppColors.phBlue),
+        label: Text(
+          _isEditMode ? 'Cambiar WiFi por Bluetooth' : 'Configurar por Bluetooth',
+          style: AppTextStyles.chartFilter.copyWith(color: AppColors.textPrimary),
+        ),
+        style: OutlinedButton.styleFrom(
+          backgroundColor: Colors.white,
+          side: const BorderSide(color: AppColors.divider),
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
     );
