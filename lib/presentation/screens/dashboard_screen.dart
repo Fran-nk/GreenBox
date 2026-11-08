@@ -16,6 +16,7 @@ import '../widgets/app_bottom_nav.dart';
 import 'add_plant_screen.dart';
 import 'profile_screen.dart';
 import 'water_footprint_screen.dart';
+import '../widgets/crop_members_section.dart';
 import '../../core/services/notification_service.dart';
 
 /// Main Dashboard screen — assembles all widgets from the Figma design.
@@ -278,18 +279,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _onDeletePlant(Plant plant) async {
     if (_selectedCropId == null) return;
 
+    // Only the administrator deletes the crop (for everyone); a guest leaves it.
+    var isOwner = true;
+    try {
+      final members = await widget.repository.getDeviceMembers(_selectedCropId!);
+      isOwner = members.any((m) => m.isOwner && m.isMe);
+    } catch (_) {}
+    if (!mounted) return;
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.darkOverlay,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        title: const Text(
-          '¿Eliminar planta?',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        title: Text(
+          isOwner ? '¿Eliminar planta?' : '¿Salir del cultivo?',
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         content: Text(
-          'Esta acción eliminará el dispositivo y todo su historial de sensores de forma permanente. ¿Estás seguro?',
-          style: TextStyle(color: Colors.white.withOpacity(0.8)),
+          isOwner
+              ? 'Esta acción eliminará el dispositivo y todo su historial de sensores de forma permanente, también para los invitados. ¿Estás seguro?'
+              : 'Dejarás de ver este cultivo. El administrador y los demás invitados lo seguirán viendo.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.8)),
         ),
         actions: [
           TextButton(
@@ -298,7 +309,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('ELIMINAR', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+            child: Text(isOwner ? 'ELIMINAR' : 'SALIR', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -427,6 +438,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onEdit: () => _onEditPlant(_activePlant!),
               onDelete: () => _onDeletePlant(_activePlant!),
             ),
+
+          // 3b. Who can see this crop
+          if (_activePlant != null && _selectedCropId != null) ...[
+            const SizedBox(height: 10),
+            CropMembersSection(
+              key: ValueKey(_selectedCropId),
+              repository: widget.repository,
+              deviceId: _selectedCropId!,
+            ),
+          ],
 
           const SizedBox(height: 10),
 

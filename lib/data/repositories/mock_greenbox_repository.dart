@@ -5,6 +5,7 @@ import '../../domain/models/plant.dart';
 import '../../domain/models/crop_card.dart';
 import '../../domain/models/chart_data_point.dart';
 import '../../domain/models/water_study.dart';
+import '../../domain/models/device_member.dart';
 import '../../domain/repositories/greenbox_repository.dart';
 
 /// Mock implementation of [GreenBoxRepository] for development.
@@ -119,7 +120,7 @@ class MockGreenBoxRepository implements GreenBoxRepository {
   }
 
   @override
-  Future<void> addDevice({
+  Future<bool> addDevice({
     required String deviceId,
     required String name,
     required String plantTemplateId,
@@ -136,7 +137,16 @@ class MockGreenBoxRepository implements GreenBoxRepository {
     if (activeSensors != null) {
       _mockActiveSensors[deviceId] = activeSensors;
     }
+    return false;
   }
+
+  @override
+  Future<List<DeviceMember>> getDeviceMembers(String deviceId) async => const [
+        DeviceMember(userId: 'me', email: 'tu@correo.com', isOwner: true, isMe: true),
+      ];
+
+  @override
+  Future<void> removeDeviceMember(String deviceId, String userId) async {}
 
   @override
   Future<void> deleteDevice(String deviceId) async {

@@ -3,6 +3,7 @@ import '../models/plant.dart';
 import '../models/crop_card.dart';
 import '../models/chart_data_point.dart';
 import '../models/water_study.dart';
+import '../models/device_member.dart';
 
 /// Abstract data repository for GreenBox sensor data.
 ///
@@ -39,8 +40,10 @@ abstract class GreenBoxRepository {
   /// Get the catalog of available plants to choose from when adding a new device.
   Future<List<Plant>> getPlantTemplates();
 
-  /// Register a new physical device and link it to a plant type.
-  Future<void> addDevice({
+  /// Register a physical device and link it to a plant type. When the device
+  /// already belongs to someone else, the user joins it as a guest instead
+  /// and this returns true (the existing crop settings are kept).
+  Future<bool> addDevice({
     required String deviceId,
     required String name,
     required String plantTemplateId,
@@ -48,8 +51,15 @@ abstract class GreenBoxRepository {
     List<String>? activeSensors,
   });
 
-  /// Delete a physical device and all associated data.
+  /// Removes the crop from the user's account. For its creator this deletes
+  /// the device and all its data for everyone; a guest just leaves it.
   Future<void> deleteDevice(String deviceId);
+
+  /// The crop's administrator (its creator) followed by its guests.
+  Future<List<DeviceMember>> getDeviceMembers(String deviceId);
+
+  /// Removes a guest from the crop (only its creator may do this).
+  Future<void> removeDeviceMember(String deviceId, String userId);
 
   /// Update the name, plant template, and thresholds of a physical device.
   Future<void> updateDevice(String deviceId, {

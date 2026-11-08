@@ -110,8 +110,8 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
           activeSensors: _activeSensors,
         );
       } else {
-        await widget.repository.addDevice(
-          deviceId: _deviceIdController.text,
+        final joined = await widget.repository.addDevice(
+          deviceId: _deviceIdController.text.trim(),
           name: _deviceNameController.text,
           plantTemplateId: _selectedTemplateId!,
           thresholds: {
@@ -120,13 +120,20 @@ class _AddPlantScreenState extends State<AddPlantScreen> {
           },
           activeSensors: _activeSensors,
         );
+        if (joined && mounted) {
+          // The GreenBox already had an administrator: the user joined its
+          // existing crop as a guest (name and settings stay as they were).
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Este GreenBox ya tenía administrador: te uniste a su cultivo como invitado.')),
+          );
+        }
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _isSaving = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al guardar: $e')),
+          SnackBar(content: Text('Error al guardar: ${e.toString().replaceFirst('Exception: ', '')}')),
         );
       }
     }

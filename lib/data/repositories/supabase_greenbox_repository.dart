@@ -5,6 +5,7 @@ import '../../domain/models/plant.dart';
 import '../../domain/models/crop_card.dart';
 import '../../domain/models/chart_data_point.dart';
 import '../../domain/models/water_study.dart';
+import '../../domain/models/device_member.dart';
 import '../../domain/repositories/greenbox_repository.dart';
 
 /// Supabase implementation of [GreenBoxRepository].
@@ -327,57 +328,79 @@ class SupabaseGreenBoxRepository implements GreenBoxRepository {
   }
 
   @override
-  Future<void> addDevice({
+  Future<bool> addDevice({
     required String deviceId,
     required String name,
     required String plantTemplateId,
     required Map<String, double> thresholds,
     List<String>? activeSensors,
   }) async {
-    // 1. Create the device entry
-    // Note: owner_id should be the current authenticated user's ID
-    final user = _client.auth.currentUser;
-    if (user == null) throw Exception('No user logged in');
+    if (_client.auth.currentUser == null) throw Exception('No user logged in');
 
-    await _client.from('devices').upsert({
-      'id': deviceId,
-      'name': name,
-      'plant_id': plantTemplateId,
-      'owner_id': user.id,
-      'active_sensors': activeSensors ?? ['ph', 'ce', 'humedad', 'luz'],
+    // The database decides: a new GreenBox is created with the user as its
+    // administrator; one that belongs to someone else adds the user as a
+    // guest (see the register_device SQL function).
+    final role = await _client.rpc('register_device', params: {
+      'p_device_id': deviceId,
+      'p_name': name,
+      'p_plant_id': plantTemplateId,
+      'p_active_sensors': activeSensors ?? ['ph', 'ce', 'humedad', 'luz'],
+      'p_min_humidity': thresholds['humidity_min'] ?? 60.0,
+      'p_max_humidity': thresholds['humidity_max'] ?? 80.0,
     });
-
-    // 2. Create the thresholds entry using the correct database column names
-    await _client.from('thresholds').upsert({
-      'device_id': deviceId,
-      'min_ph': 5.5,
-      'max_ph': 6.5,
-      'min_humidity': thresholds['humidity_min'] ?? 60.0,
-      'max_humidity': thresholds['humidity_max'] ?? 80.0,
-      'min_ec': 1.2,
-      'max_ec': 2.0,
-    });
+    return role == 'guest';
   }
 
   @override
   Future<void> deleteDevice(String deviceId) async {
-    // Clean up thresholds first to prevent reference issues
-    try {
-      await _client.from('thresholds').delete().eq('device_id', deviceId);
-    } catch (_) {}
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) throw Exception('No user logged in');
 
-    // Clean up water footprint studies (refills cascade from the study)
-    try {
-      await _client.from('water_footprint_studies').delete().eq('device_id', deviceId);
-    } catch (_) {}
+    final device = await _client
+        .from('devices')
+        .select('owner_id')
+        .eq('id', deviceId)
+        .maybeSingle();
 
-    // Clean up sensor data
-    try {
-      await _client.from('sensor_data').delete().eq('device_id', deviceId);
-    } catch (_) {}
+    if (device != null && device['owner_id'] == userId) {
+      // Thresholds, readings, studies and guests are removed by ON DELETE CASCADE.
+      await _client.from('devices').delete().eq('id', deviceId);
+    } else {
+      // Guests only leave the crop; it stays for everyone else.
+      await _client
+          .from('device_members')
+          .delete()
+          .eq('device_id', deviceId)
+          .eq('user_id', userId);
+    }
+  }
 
-    // Delete the device itself
-    await _client.from('devices').delete().eq('id', deviceId);
+  @override
+  Future<List<DeviceMember>> getDeviceMembers(String deviceId) async {
+    final userId = _client.auth.currentUser?.id;
+    final List<dynamic> rows =
+        await _client.rpc('get_device_members', params: {'p_device_id': deviceId});
+    return rows
+        .map((r) => DeviceMember(
+              userId: r['user_id'] as String,
+              email: (r['email'] as String?) ?? '',
+              isOwner: r['is_owner'] == true,
+              isMe: r['user_id'] == userId,
+            ))
+        .toList();
+  }
+
+  @override
+  Future<void> removeDeviceMember(String deviceId, String userId) async {
+    final List<dynamic> removed = await _client
+        .from('device_members')
+        .delete()
+        .eq('device_id', deviceId)
+        .eq('user_id', userId)
+        .select('user_id');
+    if (removed.isEmpty) {
+      throw Exception('Solo el administrador del cultivo puede quitar invitados');
+    }
   }
 
   @override
@@ -395,7 +418,13 @@ class SupabaseGreenBoxRepository implements GreenBoxRepository {
       updateData['active_sensors'] = activeSensors;
     }
 
-    await _client.from('devices').update(updateData).eq('id', deviceId);
+    // RLS turns an update on someone else's device into a silent no-op, so
+    // ask for the updated row and fail loudly when there is none.
+    final List<dynamic> updated =
+        await _client.from('devices').update(updateData).eq('id', deviceId).select('id');
+    if (updated.isEmpty) {
+      throw Exception('No tienes permiso para editar este dispositivo');
+    }
 
     await _client.from('thresholds').update({
       'min_humidity': thresholds['humidity_min'] ?? 60.0,
