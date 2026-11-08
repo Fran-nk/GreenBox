@@ -6,6 +6,7 @@
 #include <NimBLEDevice.h>     // <-- Bluetooth LE para configurar el WiFi desde la app
 #include <Preferences.h>      // <-- Memoria persistente (NVS) para guardar el WiFi
 #include <time.h>
+#include <esp_mac.h> // esp_read_mac(): MAC de fábrica para el UUID
 
 #include "root_ca.h" // Certificados raíz para validar el HTTPS de Supabase
 #include "secrets.h" // Credenciales (no se sube a git; ver secrets.example.h)
@@ -28,7 +29,7 @@ const char *supabase_key = SUPABASE_KEY;
 // Deben coincidir con lib/core/services/ble_provisioning_service.dart
 #define PROV_SERVICE_UUID "6e1d0001-8f0b-4c55-9a3e-2b7c1e5a9f01"
 #define CHAR_DEVICE_ID_UUID "6e1d0002-8f0b-4c55-9a3e-2b7c1e5a9f01"   // lectura: UUID del dispositivo
-#define CHAR_NETWORKS_UUID "6e1d0003-8f0b-4c55-9a3e-2b7c1e5a9f01"    // lectura: redes visibles (JSON)
+#define CHAR_NETWORKS_UUID "6e1d0003-8f0b-4c55-9a3e-2b7c1e5a9f01"    // lectura: redes visibles (JSON); escritura: reescanear
 #define CHAR_CREDENTIALS_UUID "6e1d0004-8f0b-4c55-9a3e-2b7c1e5a9f01" // escritura: {"ssid","pass"}
 #define CHAR_STATUS_UUID "6e1d0005-8f0b-4c55-9a3e-2b7c1e5a9f01"      // lectura/notificación
 
@@ -40,6 +41,12 @@ NimBLECharacteristic *networksChar = nullptr;
 // Credenciales recibidas por Bluetooth; se procesan en loop(), no en el
 // callback (que corre en la tarea de Bluetooth)
 volatile bool credentialsReceived = false;
+// La app pidió un nuevo escaneo de redes (escritura en CHAR_NETWORKS_UUID)
+volatile bool rescanRequested = false;
+// Hay un escaneo WiFi asíncrono en curso
+bool scanInProgress = false;
+// Redes publicadas en el último escaneo (0 = lista vacía o escaneo fallido)
+int publishedNetworks = 0;
 String pendingSsid;
 String pendingPass;
 
@@ -51,7 +58,11 @@ String device_uuid = "";
 // del ESP32
 String generateDeviceUUID() {
   uint8_t mac[6];
-  WiFi.macAddress(mac);
+  // Se lee la MAC grabada de fábrica (eFuse). WiFi.macAddress() puede
+  // devolver 00:00:00:00:00:00 si la pila WiFi aún no arrancó, y entonces
+  // todas las placas generaban el mismo UUID (…-000000000000) y chocaban en
+  // Supabase.
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char uuidStr[37];
   // Formato compatible con UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
   // Namespace único para GreenBox + los 6 bytes de la MAC única
@@ -121,10 +132,28 @@ void setStatus(const char *status) {
   statusChar->notify();
 }
 
-// Escanea las redes WiFi visibles y las publica (JSON, más fuertes primero)
-// para que la app las ofrezca en una lista
-void scanNetworks() {
-  int n = WiFi.scanNetworks();
+// Inicia un escaneo WiFi asíncrono: no bloquea el loop ni la conexión
+// Bluetooth con la app (el escaneo bloqueante podía dejarla esperando)
+void startNetworkScan() {
+  if (scanInProgress) return;
+  if (WiFi.scanNetworks(true) == WIFI_SCAN_FAILED) {
+    Serial.println("No se pudo iniciar el escaneo WiFi");
+    return;
+  }
+  scanInProgress = true;
+}
+
+// Publica las redes encontradas (JSON, más fuertes primero) para que la app
+// las ofrezca en una lista. Devuelve false si el escaneo sigue en curso.
+bool publishScanResults() {
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return false;
+  scanInProgress = false;
+  if (n < 0) {
+    Serial.println("Escaneo WiFi fallido");
+    WiFi.scanDelete();
+    return true; // Se reintenta desde provisioningLoop()
+  }
   JsonDocument doc;
   JsonArray list = doc.to<JsonArray>();
   String json = "[]";
@@ -152,8 +181,17 @@ void scanNetworks() {
   }
   WiFi.scanDelete();
   networksChar->setValue((const uint8_t *)json.c_str(), json.length());
+  publishedNetworks = list.size();
   Serial.println("Redes visibles: " + json);
+  return true;
 }
+
+class NetworksCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *characteristic,
+               NimBLEConnInfo &connInfo) override {
+    rescanRequested = true;
+  }
+};
 
 class CredentialsCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *characteristic,
@@ -189,7 +227,10 @@ void startProvisioning() {
   idChar->setValue((const uint8_t *)device_uuid.c_str(), device_uuid.length());
 
   networksChar =
-      service->createCharacteristic(CHAR_NETWORKS_UUID, NIMBLE_PROPERTY::READ);
+      service->createCharacteristic(CHAR_NETWORKS_UUID,
+                                    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  networksChar->setValue("[]");
+  networksChar->setCallbacks(new NetworksCallbacks());
 
   NimBLECharacteristic *credChar = service->createCharacteristic(
       CHAR_CREDENTIALS_UUID, NIMBLE_PROPERTY::WRITE);
@@ -199,7 +240,7 @@ void startProvisioning() {
       CHAR_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
 
   service->start();
-  scanNetworks();
+  startNetworkScan();
   setStatus("waiting");
 
   // El UUID de 128 bits va en el anuncio; el nombre, en la respuesta al escaneo
@@ -229,6 +270,10 @@ void provisioningLoop() {
   if (credentialsReceived) {
     credentialsReceived = false;
     setStatus("connecting");
+    // Un escaneo en curso impide conectar: esperar a que termine (máx. 6 s)
+    for (uint32_t t = millis(); scanInProgress && millis() - t < 6000;) {
+      if (!publishScanResults()) delay(100);
+    }
     if (connectWiFi(pendingSsid, pendingPass, 15000)) {
       prefs.putString("ssid", pendingSsid);
       prefs.putString("pass", pendingPass);
@@ -240,15 +285,23 @@ void provisioningLoop() {
     lastScan = lastRetry = millis();
   }
 
-  // Sin móvil conectado: refrescar la lista de redes cada 30 s
-  if (!phoneConnected && millis() - lastScan > 30000) {
-    scanNetworks();
+  if (scanInProgress) publishScanResults();
+
+  // Nuevo escaneo si: la app lo pide, la lista está vacía (el primer escaneo
+  // puede fallar justo tras arrancar; reintento cada 5 s) o, sin móvil
+  // conectado, para refrescarla cada 30 s
+  if (!scanInProgress &&
+      (rescanRequested || (publishedNetworks == 0 && millis() - lastScan > 5000) ||
+       (!phoneConnected && millis() - lastScan > 30000))) {
+    rescanRequested = false;
+    startNetworkScan();
     lastScan = millis();
   }
 
   // Si hay una red guardada (p. ej. el router estaba apagado al arrancar),
   // reintentarla cada 60 s
-  if (!phoneConnected && millis() - lastRetry > 60000 && prefs.isKey("ssid")) {
+  if (!phoneConnected && !scanInProgress && millis() - lastRetry > 60000 &&
+      prefs.isKey("ssid")) {
     if (connectWiFi(prefs.getString("ssid"), prefs.getString("pass"), 10000)) {
       ESP.restart();
     }

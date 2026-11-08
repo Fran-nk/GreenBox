@@ -32,6 +32,8 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
   String? _deviceUuid;
   List<String> _networks = [];
   bool _obscurePassword = true;
+  bool _loadingNetworks = false;
+  Timer? _sendTimer;
   String? _error;
 
   @override
@@ -67,16 +69,14 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
       await _ble.connect(device.deviceId);
       _connectedId = device.deviceId;
       final uuid = await _ble.readDeviceId(device.deviceId);
-      final networks = await _ble.readNetworks(device.deviceId);
       if (!mounted) return;
+      // The form opens right away; the network list loads on its own and the
+      // SSID can always be typed by hand.
       setState(() {
         _deviceUuid = uuid;
-        _networks = networks;
-        if (networks.isNotEmpty && _ssidController.text.isEmpty) {
-          _ssidController.text = networks.first;
-        }
         _step = _Step.form;
       });
+      _loadNetworks();
     } catch (e) {
       await _ble.disconnect(device.deviceId);
       _connectedId = null;
@@ -84,6 +84,30 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
         setState(() => _error = 'No se pudo conectar con el GreenBox. Acércate e inténtalo de nuevo.');
         _startScan();
       }
+    }
+  }
+
+  /// Reads the WiFi list from the ESP32; when it is empty (the scan at boot
+  /// can fail) or [rescan] is set, asks the ESP32 to scan again.
+  Future<void> _loadNetworks({bool rescan = false}) async {
+    final id = _connectedId;
+    if (id == null || _loadingNetworks) return;
+    setState(() => _loadingNetworks = true);
+    try {
+      var networks = rescan ? <String>[] : await _ble.readNetworks(id);
+      if (networks.isEmpty) networks = await _ble.rescanNetworks(id);
+      if (!mounted) return;
+      setState(() {
+        // A failed rescan keeps the previous list.
+        if (networks.isNotEmpty || _networks.isEmpty) _networks = networks;
+        if (networks.isNotEmpty && _ssidController.text.isEmpty) {
+          _ssidController.text = networks.first;
+        }
+      });
+    } catch (_) {
+      // Keep whatever list there was; the SSID can be typed by hand.
+    } finally {
+      if (mounted) setState(() => _loadingNetworks = false);
     }
   }
 
@@ -100,6 +124,15 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
       final status = await _ble.watchStatus(id);
       _statusSub = status.listen(_onStatus);
       await _ble.sendCredentials(id, ssid: ssid, password: _passwordController.text);
+      // The ESP32 answers within ~17 s; never spin forever if the link drops.
+      _sendTimer?.cancel();
+      _sendTimer = Timer(const Duration(seconds: 35), () {
+        if (!mounted || _step != _Step.sending) return;
+        setState(() {
+          _step = _Step.form;
+          _error = 'El GreenBox no respondió. Comprueba que siga encendido y cerca, e inténtalo de nuevo.';
+        });
+      });
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -112,6 +145,9 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
 
   void _onStatus(String status) {
     if (!mounted) return;
+    if (status == 'connected' || status == 'failed' || status.startsWith('error')) {
+      _sendTimer?.cancel();
+    }
     switch (status) {
       case 'connected':
         // The ESP32 restarts in normal mode and drops the Bluetooth link.
@@ -218,6 +254,27 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
   List<Widget> _buildForm() {
     return [
       Text('2. Elige la red WiFi', style: AppTextStyles.alertSubtitle),
+      const SizedBox(height: 10),
+      Row(
+        children: [
+          if (_loadingNetworks) ...[
+            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
+            const SizedBox(width: 10),
+            Expanded(child: Text('Buscando redes WiFi...', style: AppTextStyles.chartFilter)),
+          ] else
+            Expanded(
+              child: Text(
+                _networks.isEmpty ? 'No se encontraron redes. Escribe el nombre o busca de nuevo.' : '${_networks.length} redes encontradas',
+                style: AppTextStyles.chartFilter,
+              ),
+            ),
+          TextButton.icon(
+            onPressed: _loadingNetworks ? null : () => _loadNetworks(rescan: true),
+            icon: const Icon(Icons.refresh, size: 18, color: AppColors.textSecondary),
+            label: const Text('Buscar redes', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+        ],
+      ),
       const SizedBox(height: 10),
       if (_networks.isNotEmpty) ...[
         _card(
@@ -334,6 +391,7 @@ class _WifiSetupScreenState extends State<WifiSetupScreen> {
   void dispose() {
     _scanSub?.cancel();
     _statusSub?.cancel();
+    _sendTimer?.cancel();
     _ble.stopScan();
     final id = _connectedId;
     if (id != null) _ble.disconnect(id);
